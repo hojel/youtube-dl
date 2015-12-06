@@ -3,22 +3,23 @@ from __future__ import unicode_literals
 import time
 import hmac
 
-from .subtitles import SubtitlesInfoExtractor
+from .common import InfoExtractor
 from ..compat import (
     compat_str,
     compat_urllib_parse,
-    compat_urllib_request,
 )
 from ..utils import (
     int_or_none,
     float_or_none,
+    sanitized_Request,
     xpath_text,
     ExtractorError,
 )
 
 
-class AtresPlayerIE(SubtitlesInfoExtractor):
+class AtresPlayerIE(InfoExtractor):
     _VALID_URL = r'https?://(?:www\.)?atresplayer\.com/television/[^/]+/[^/]+/[^/]+/(?P<id>.+?)_\d+\.html'
+    _NETRC_MACHINE = 'atresplayer'
     _TESTS = [
         {
             'url': 'http://www.atresplayer.com/television/programas/el-club-de-la-comedia/temporada-4/capitulo-10-especial-solidario-nochebuena_2014122100174.html',
@@ -62,7 +63,7 @@ class AtresPlayerIE(SubtitlesInfoExtractor):
             'j_password': password,
         }
 
-        request = compat_urllib_request.Request(
+        request = sanitized_Request(
             self._LOGIN_URL, compat_urllib_parse.urlencode(login_form).encode('utf-8'))
         request.add_header('Content-Type', 'application/x-www-form-urlencoded')
         response = self._download_webpage(
@@ -93,7 +94,7 @@ class AtresPlayerIE(SubtitlesInfoExtractor):
 
         formats = []
         for fmt in ['windows', 'android_tablet']:
-            request = compat_urllib_request.Request(
+            request = sanitized_Request(
                 self._URL_VIDEO_TEMPLATE.format(fmt, episode_id, timestamp_shifted, token))
             request.add_header('User-Agent', self._USER_AGENT)
 
@@ -144,13 +145,12 @@ class AtresPlayerIE(SubtitlesInfoExtractor):
         thumbnail = xpath_text(episode, './media/asset/files/background', 'thumbnail')
 
         subtitles = {}
-        subtitle = xpath_text(episode, './media/asset/files/subtitle', 'subtitle')
-        if subtitle:
-            subtitles['es'] = subtitle
-
-        if self._downloader.params.get('listsubtitles', False):
-            self._list_available_subtitles(video_id, subtitles)
-            return
+        subtitle_url = xpath_text(episode, './media/asset/files/subtitle', 'subtitle')
+        if subtitle_url:
+            subtitles['es'] = [{
+                'ext': 'srt',
+                'url': subtitle_url,
+            }]
 
         return {
             'id': video_id,
@@ -159,5 +159,5 @@ class AtresPlayerIE(SubtitlesInfoExtractor):
             'thumbnail': thumbnail,
             'duration': duration,
             'formats': formats,
-            'subtitles': self.extract_subtitles(video_id, subtitles),
+            'subtitles': subtitles,
         }

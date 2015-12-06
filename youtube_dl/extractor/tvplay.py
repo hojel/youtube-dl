@@ -16,6 +16,7 @@ class TVPlayIE(InfoExtractor):
     _VALID_URL = r'''(?x)http://(?:www\.)?
         (?:tvplay\.lv/parraides|
            tv3play\.lt/programos|
+           play\.tv3\.lt/programos|
            tv3play\.ee/sisu|
            tv3play\.se/program|
            tv6play\.se/program|
@@ -25,6 +26,7 @@ class TVPlayIE(InfoExtractor):
            viasat4play\.no/programmer|
            tv6play\.no/programmer|
            tv3play\.dk/programmer|
+           play\.novatv\.bg/programi
         )/[^/]+/(?P<id>\d+)
         '''
     _TESTS = [
@@ -45,7 +47,7 @@ class TVPlayIE(InfoExtractor):
             },
         },
         {
-            'url': 'http://www.tv3play.lt/programos/moterys-meluoja-geriau/409229?autostart=true',
+            'url': 'http://play.tv3.lt/programos/moterys-meluoja-geriau/409229?autostart=true',
             'info_dict': {
                 'id': '409229',
                 'ext': 'flv',
@@ -102,6 +104,7 @@ class TVPlayIE(InfoExtractor):
                 'duration': 1492,
                 'timestamp': 1330522854,
                 'upload_date': '20120229',
+                'age_limit': 18,
             },
             'params': {
                 # rtmp download
@@ -166,6 +169,22 @@ class TVPlayIE(InfoExtractor):
                 'duration': 2594,
                 'timestamp': 1393236292,
                 'upload_date': '20140224',
+            },
+            'params': {
+                # rtmp download
+                'skip_download': True,
+            },
+        },
+        {
+            'url': 'http://play.novatv.bg/programi/zdravei-bulgariya/624952?autostart=true',
+            'info_dict': {
+                'id': '624952',
+                'ext': 'flv',
+                'title': 'Здравей, България (12.06.2015 г.) ',
+                'description': 'md5:99f3700451ac5bb71a260268b8daefd7',
+                'duration': 8838,
+                'timestamp': 1434100372,
+                'upload_date': '20150612',
             },
             'params': {
                 # rtmp download

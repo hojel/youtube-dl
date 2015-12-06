@@ -3,14 +3,14 @@ from __future__ import unicode_literals
 import json
 import re
 
-from .subtitles import SubtitlesInfoExtractor
+from .common import InfoExtractor
 
-from ..compat import (
-    compat_str,
-)
+from ..compat import compat_str
+from ..utils import int_or_none
 
 
-class TEDIE(SubtitlesInfoExtractor):
+class TEDIE(InfoExtractor):
+    IE_NAME = 'ted'
     _VALID_URL = r'''(?x)
         (?P<proto>https?://)
         (?P<type>www|embed(?:-ssl)?)(?P<urlmain>\.ted\.com/
@@ -170,25 +170,54 @@ class TEDIE(SubtitlesInfoExtractor):
                 finfo = self._NATIVE_FORMATS.get(f['format_id'])
                 if finfo:
                     f.update(finfo)
-        else:
-            # Use rtmp downloads
-            formats = [{
-                'format_id': f['name'],
-                'url': talk_info['streamer'],
-                'play_path': f['file'],
-                'ext': 'flv',
-                'width': f['width'],
-                'height': f['height'],
-                'tbr': f['bitrate'],
-            } for f in talk_info['resources']['rtmp']]
+
+        for format_id, resources in talk_info['resources'].items():
+            if format_id == 'h264':
+                for resource in resources:
+                    bitrate = int_or_none(resource.get('bitrate'))
+                    formats.append({
+                        'url': resource['file'],
+                        'format_id': '%s-%sk' % (format_id, bitrate),
+                        'tbr': bitrate,
+                    })
+            elif format_id == 'rtmp':
+                streamer = talk_info.get('streamer')
+                if not streamer:
+                    continue
+                for resource in resources:
+                    formats.append({
+                        'format_id': '%s-%s' % (format_id, resource.get('name')),
+                        'url': streamer,
+                        'play_path': resource['file'],
+                        'ext': 'flv',
+                        'width': int_or_none(resource.get('width')),
+                        'height': int_or_none(resource.get('height')),
+                        'tbr': int_or_none(resource.get('bitrate')),
+                    })
+            elif format_id == 'hls':
+                hls_formats = self._extract_m3u8_formats(
+                    resources.get('stream'), video_name, 'mp4', m3u8_id=format_id)
+                for f in hls_formats:
+                    if f.get('format_id') == 'hls-meta':
+                        continue
+                    if not f.get('height'):
+                        f['vcodec'] = 'none'
+                    else:
+                        f['acodec'] = 'none'
+                formats.extend(hls_formats)
+
+        audio_download = talk_info.get('audioDownload')
+        if audio_download:
+            formats.append({
+                'url': audio_download,
+                'format_id': 'audio',
+                'vcodec': 'none',
+                'preference': -0.5,
+            })
+
         self._sort_formats(formats)
 
         video_id = compat_str(talk_info['id'])
-        # subtitles
-        video_subtitles = self.extract_subtitles(video_id, talk_info)
-        if self._downloader.params.get('listsubtitles', False):
-            self._list_available_subtitles(video_id, talk_info)
-            return
 
         thumbnail = talk_info['thumb']
         if not thumbnail.startswith('http'):
@@ -199,21 +228,25 @@ class TEDIE(SubtitlesInfoExtractor):
             'uploader': talk_info['speaker'],
             'thumbnail': thumbnail,
             'description': self._og_search_description(webpage),
-            'subtitles': video_subtitles,
+            'subtitles': self._get_subtitles(video_id, talk_info),
             'formats': formats,
             'duration': talk_info.get('duration'),
         }
 
-    def _get_available_subtitles(self, video_id, talk_info):
+    def _get_subtitles(self, video_id, talk_info):
         languages = [lang['languageCode'] for lang in talk_info.get('languages', [])]
         if languages:
             sub_lang_list = {}
             for l in languages:
-                url = 'http://www.ted.com/talks/subtitles/id/%s/lang/%s/format/srt' % (video_id, l)
-                sub_lang_list[l] = url
+                sub_lang_list[l] = [
+                    {
+                        'url': 'http://www.ted.com/talks/subtitles/id/%s/lang/%s/format/%s' % (video_id, l, ext),
+                        'ext': ext,
+                    }
+                    for ext in ['ted', 'srt']
+                ]
             return sub_lang_list
         else:
-            self._downloader.report_warning('video doesn\'t have subtitles')
             return {}
 
     def _watch_info(self, url, name):

@@ -3,31 +3,29 @@ from __future__ import unicode_literals
 import re
 
 from .common import InfoExtractor
-from .subtitles import SubtitlesInfoExtractor
 
-from ..compat import (
-    compat_str,
-    compat_urllib_request,
-    compat_urlparse,
-)
+from ..compat import compat_urlparse
 from ..utils import (
     clean_html,
     int_or_none,
     parse_iso8601,
+    sanitized_Request,
     unescapeHTML,
+    xpath_text,
+    xpath_with_ns,
 )
 
 
-class BlipTVIE(SubtitlesInfoExtractor):
+class BlipTVIE(InfoExtractor):
     _VALID_URL = r'https?://(?:\w+\.)?blip\.tv/(?:(?:.+-|rss/flash/)(?P<id>\d+)|((?:play/|api\.swf#)(?P<lookup_id>[\da-zA-Z+_]+)))'
 
     _TESTS = [
         {
             'url': 'http://blip.tv/cbr/cbr-exclusive-gotham-city-imposters-bats-vs-jokerz-short-3-5796352',
-            'md5': 'c6934ad0b6acf2bd920720ec888eb812',
+            'md5': '80baf1ec5c3d2019037c1c707d676b9f',
             'info_dict': {
                 'id': '5779306',
-                'ext': 'mov',
+                'ext': 'm4v',
                 'title': 'CBR EXCLUSIVE: "Gotham City Imposters" Bats VS Jokerz Short 3',
                 'description': 'md5:9bc31f227219cde65e47eeec8d2dc596',
                 'timestamp': 1323138843,
@@ -101,7 +99,30 @@ class BlipTVIE(SubtitlesInfoExtractor):
                 'vcodec': 'none',
             }
         },
+        {
+            # missing duration
+            'url': 'http://blip.tv/rss/flash/6700880',
+            'info_dict': {
+                'id': '6684191',
+                'ext': 'm4v',
+                'title': 'Cowboy Bebop: Gateway Shuffle Review',
+                'description': 'md5:3acc480c0f9ae157f5fe88547ecaf3f8',
+                'timestamp': 1386639757,
+                'upload_date': '20131210',
+                'uploader': 'sfdebris',
+                'uploader_id': '706520',
+            }
+        }
     ]
+
+    @staticmethod
+    def _extract_url(webpage):
+        mobj = re.search(r'<meta\s[^>]*https?://api\.blip\.tv/\w+/redirect/\w+/(\d+)', webpage)
+        if mobj:
+            return 'http://blip.tv/a/a-' + mobj.group(1)
+        mobj = re.search(r'<(?:iframe|embed|object)\s[^>]*(https?://(?:\w+\.)?blip\.tv/(?:play/|api\.swf#)[a-zA-Z0-9_]+)', webpage)
+        if mobj:
+            return mobj.group(1)
 
     def _real_extract(self, url):
         mobj = re.match(self._VALID_URL, url)
@@ -120,35 +141,34 @@ class BlipTVIE(SubtitlesInfoExtractor):
 
         rss = self._download_xml('http://blip.tv/rss/flash/%s' % video_id, video_id, 'Downloading video RSS')
 
-        def blip(s):
-            return '{http://blip.tv/dtd/blip/1.0}%s' % s
-
-        def media(s):
-            return '{http://search.yahoo.com/mrss/}%s' % s
-
-        def itunes(s):
-            return '{http://www.itunes.com/dtds/podcast-1.0.dtd}%s' % s
+        def _x(p):
+            return xpath_with_ns(p, {
+                'blip': 'http://blip.tv/dtd/blip/1.0',
+                'media': 'http://search.yahoo.com/mrss/',
+                'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd',
+            })
 
         item = rss.find('channel/item')
 
-        video_id = item.find(blip('item_id')).text
-        title = item.find('./title').text
-        description = clean_html(compat_str(item.find(blip('puredescription')).text))
-        timestamp = parse_iso8601(item.find(blip('datestamp')).text)
-        uploader = item.find(blip('user')).text
-        uploader_id = item.find(blip('userid')).text
-        duration = int(item.find(blip('runtime')).text)
-        media_thumbnail = item.find(media('thumbnail'))
-        thumbnail = media_thumbnail.get('url') if media_thumbnail is not None else item.find(itunes('image')).text
-        categories = [category.text for category in item.findall('category')]
+        video_id = xpath_text(item, _x('blip:item_id'), 'video id') or lookup_id
+        title = xpath_text(item, 'title', 'title', fatal=True)
+        description = clean_html(xpath_text(item, _x('blip:puredescription'), 'description'))
+        timestamp = parse_iso8601(xpath_text(item, _x('blip:datestamp'), 'timestamp'))
+        uploader = xpath_text(item, _x('blip:user'), 'uploader')
+        uploader_id = xpath_text(item, _x('blip:userid'), 'uploader id')
+        duration = int_or_none(xpath_text(item, _x('blip:runtime'), 'duration'))
+        media_thumbnail = item.find(_x('media:thumbnail'))
+        thumbnail = (media_thumbnail.get('url') if media_thumbnail is not None
+                     else xpath_text(item, 'image', 'thumbnail'))
+        categories = [category.text for category in item.findall('category') if category is not None]
 
         formats = []
-        subtitles = {}
+        subtitles_urls = {}
 
-        media_group = item.find(media('group'))
-        for media_content in media_group.findall(media('content')):
+        media_group = item.find(_x('media:group'))
+        for media_content in media_group.findall(_x('media:content')):
             url = media_content.get('url')
-            role = media_content.get(blip('role'))
+            role = media_content.get(_x('blip:role'))
             msg = self._download_webpage(
                 url + '?showplayer=20140425131715&referrer=http://blip.tv&mask=7&skin=flashvars&view=url',
                 video_id, 'Resolving URL for %s' % role)
@@ -161,25 +181,22 @@ class BlipTVIE(SubtitlesInfoExtractor):
                 }
                 lang = role.rpartition('-')[-1].strip().lower()
                 langcode = LANGS.get(lang, lang)
-                subtitles[langcode] = url
+                subtitles_urls[langcode] = url
             elif media_type.startswith('video/'):
                 formats.append({
                     'url': real_url,
                     'format_id': role,
                     'format_note': media_type,
-                    'vcodec': media_content.get(blip('vcodec')) or 'none',
-                    'acodec': media_content.get(blip('acodec')),
+                    'vcodec': media_content.get(_x('blip:vcodec')) or 'none',
+                    'acodec': media_content.get(_x('blip:acodec')),
                     'filesize': media_content.get('filesize'),
                     'width': int_or_none(media_content.get('width')),
                     'height': int_or_none(media_content.get('height')),
                 })
+        self._check_formats(formats, video_id)
         self._sort_formats(formats)
 
-        # subtitles
-        video_subtitles = self.extract_subtitles(video_id, subtitles)
-        if self._downloader.params.get('listsubtitles', False):
-            self._list_available_subtitles(video_id, subtitles)
-            return
+        subtitles = self.extract_subtitles(video_id, subtitles_urls)
 
         return {
             'id': video_id,
@@ -192,15 +209,22 @@ class BlipTVIE(SubtitlesInfoExtractor):
             'thumbnail': thumbnail,
             'categories': categories,
             'formats': formats,
-            'subtitles': video_subtitles,
+            'subtitles': subtitles,
         }
 
-    def _download_subtitle_url(self, sub_lang, url):
-        # For some weird reason, blip.tv serves a video instead of subtitles
-        # when we request with a common UA
-        req = compat_urllib_request.Request(url)
-        req.add_header('User-Agent', 'youtube-dl')
-        return self._download_webpage(req, None, note=False)
+    def _get_subtitles(self, video_id, subtitles_urls):
+        subtitles = {}
+        for lang, url in subtitles_urls.items():
+            # For some weird reason, blip.tv serves a video instead of subtitles
+            # when we request with a common UA
+            req = sanitized_Request(url)
+            req.add_header('User-Agent', 'youtube-dl')
+            subtitles[lang] = [{
+                # The extension is 'srt' but it's actually an 'ass' file
+                'ext': 'ass',
+                'data': self._download_webpage(req, None, note=False),
+            }]
+        return subtitles
 
 
 class BlipTVUserIE(InfoExtractor):
